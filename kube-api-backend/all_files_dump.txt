@@ -1,0 +1,1890 @@
+
+
+===== FILE: ./src/routes/groups.js =====
+import { Router } from "express";
+import {
+  createGroup,
+  listGroups,
+  addUserToGroup
+} from "../controllers/group.controller.js";
+
+const r = Router();
+
+r.post("/", createGroup);
+r.get("/", listGroups);
+r.post("/:group/users", addUserToGroup);
+
+export default r;
+
+===== FILE: ./src/routes/serviceaccounts.js =====
+import { Router } from "express";
+import { createSA, listSA } from "../controllers/sa.controller.js";
+
+const r = Router();
+r.post("/", createSA);
+r.get("/", listSA);
+export default r;
+
+===== FILE: ./src/routes/bindings.js =====
+import { Router } from "express";
+import {
+  createRoleBinding,
+  createClusterRoleBinding,
+  listRoleBindings,
+  listClusterRoleBindings,
+  deleteBinding,
+  getBindingYAML,
+  applyBindingYAML
+} from "../controllers/binding.controller.js";
+
+const router = Router();
+
+/* CREATE */
+router.post("/rolebinding", createRoleBinding);
+router.post("/clusterrolebinding", createClusterRoleBinding);
+
+/* LIST */
+router.get("/rolebindings", listRoleBindings);
+router.get("/clusterrolebindings", listClusterRoleBindings);
+
+/* YAML */
+router.get("/yaml/:name", getBindingYAML);
+router.post("/apply-yaml", applyBindingYAML);
+
+/* DELETE */
+router.post("/delete", deleteBinding);
+
+export default router;
+
+===== FILE: ./src/routes/users.js =====
+import { Router } from "express";
+import {
+  createUser,
+  listUsers,
+  disableUser,
+  enableUser,
+  deleteUser
+} from "../controllers/user.controller.js";
+
+const router = Router();
+
+/**
+ * Create user
+ */
+router.post("/", createUser);
+
+/**
+ * List users
+ */
+router.get("/", listUsers);
+
+/**
+ * Soft revoke (disable user)
+ */
+router.post("/:username/disable", disableUser);
+
+/**
+ * Re-enable user (rotate cert + kubeconfig)
+ */
+router.post("/:username/enable", enableUser);
+
+/**
+ * Hard delete (permanent revoke)
+ */
+router.delete("/:username", deleteUser);
+
+export default router;
+
+===== FILE: ./src/routes/roles.js =====
+import { Router } from "express";
+import {
+  createRole,
+  createClusterRole,
+  listRoles,
+  listClusterRoles,
+  getRoleBindings,
+  deleteRole,
+  diffRole,
+  roleUsage
+} from "../controllers/role.controller.js";
+
+import { runOut } from "../utils/exec.js";
+
+const r = Router();
+
+/* ================= CREATE ================= */
+
+r.post("/role", createRole);
+r.post("/clusterrole", createClusterRole);
+
+/* ================= LIST ================= */
+
+r.get("/role", listRoles);
+r.get("/clusterrole", listClusterRoles);
+
+/* ================= USAGE ================= */
+
+r.get("/usage", roleUsage);
+
+/* ================= FETCH YAML (NEW) ================= */
+/**
+ * GET /api/roles/yaml?name=&namespace=&cluster=true|false
+ */
+r.get("/yaml", (req, res) => {
+  const { name, namespace, cluster } = req.query;
+
+  if (!name) {
+    return res.status(400).json({ error: "name is required" });
+  }
+
+  const cmd = cluster === "true"
+    ? `kubectl get clusterrole ${name} -o yaml`
+    : `kubectl get role ${name} -n ${namespace} -o yaml`;
+
+  const yaml = runOut(cmd);
+  res.json({ yaml });
+});
+
+
+
+/* ================= AGGREGATED ================= */
+
+r.get("/", async (req, res) => {
+  const roles = JSON.parse(
+    runOut("kubectl get roles --all-namespaces -o json")
+  ).items.map(r => ({
+    name: r.metadata.name,
+    namespace: r.metadata.namespace,
+    kind: "Role"
+  }));
+
+  const clusterRoles = JSON.parse(
+    runOut("kubectl get clusterroles -o json")
+  ).items.map(r => ({
+    name: r.metadata.name,
+    kind: "ClusterRole"
+  }));
+
+  res.json([...roles, ...clusterRoles]);
+});
+
+/* ================= ROLE → BINDINGS ================= */
+
+r.get("/bindings/:namespace/:name", getRoleBindings);
+
+/* ================= DELETE ================= */
+
+r.post("/delete", deleteRole);
+
+/* ================= DIFF ================= */
+
+r.post("/diff", diffRole);
+
+export default r;
+
+===== FILE: ./src/routes/rbac.js =====
+import { Router } from "express";
+import User from "../models/User.js";
+import Group from "../models/Group.js";
+import RoleBinding from "../models/RoleBinding.js";
+import ClusterRoleBinding from "../models/ClusterRoleBinding.js";
+import { canI } from "../controllers/rbac.controller.js";
+
+const router = Router();
+
+/**
+ * Permission simulator
+ */
+router.post("/can-i", canI);
+
+/**
+ * RBAC SUMMARY
+ * Who has access to what and why
+ */
+router.get("/summary", async (req, res) => {
+  const users = await User.find();
+  const groups = await Group.find();
+  const roleBindings = await RoleBinding.find();
+  const clusterRoleBindings = await ClusterRoleBinding.find();
+
+  res.json({
+    users,
+    groups,
+    roleBindings,
+    clusterRoleBindings
+  });
+});
+
+/**
+ * RBAC GRAPH DATA
+ * Role ↔ Binding ↔ User/Group
+ */
+router.get("/graph", async (req, res) => {
+  const users = await User.find();
+  const groups = await Group.find();
+  const roleBindings = await RoleBinding.find();
+  const clusterRoleBindings = await ClusterRoleBinding.find();
+
+  const nodes = [
+    ...users.map(u => ({ id: u.username, type: "User" })),
+    ...groups.map(g => ({ id: g.name, type: "Group" }))
+  ];
+
+  const edges = [
+    ...roleBindings.flatMap(b =>
+      b.subjects.map(s => ({
+        from: s.name,
+        to: b.roleRef.name,
+        type: "RoleBinding"
+      }))
+    ),
+    ...clusterRoleBindings.flatMap(b =>
+      b.subjects.map(s => ({
+        from: s.name,
+        to: b.roleRef.name,
+        type: "ClusterRoleBinding"
+      }))
+    )
+  ];
+
+  res.json({ nodes, edges });
+});
+
+/**
+ * ✅ IMPORTANT
+ * Default export REQUIRED for server.js
+ */
+export default router;
+
+===== FILE: ./src/routes/namespaces.js =====
+import { Router } from "express";
+import { coreV1 } from "../kube/client.js";
+
+const router = Router();
+
+/**
+ * List Kubernetes namespaces
+ */
+router.get("/", async (req, res, next) => {
+  try {
+    const { body } = await coreV1.listNamespace();
+
+    // 🛡️ Defensive: body or items may be undefined if API fails
+    const namespaces = (body?.items || []).map(
+      ns => ns.metadata.name
+    );
+
+    res.json(namespaces);
+  } catch (err) {
+    next(err);
+  }
+});
+
+export default router;
+
+===== FILE: ./src/routes/kubeconfigs.js =====
+import { Router } from "express";
+import {
+  downloadUserKubeconfig,
+  downloadSAKubeconfig
+} from "../controllers/kubeconfig.controller.js";
+
+const router = Router();
+
+router.get("/user/:username", downloadUserKubeconfig);
+router.get("/serviceaccount/:name/:namespace", downloadSAKubeconfig);
+
+export default router;
+
+===== FILE: ./src/services/cert.service.js =====
+import fs from "fs";
+import path from "path";
+import { execSync } from "child_process";
+import { certV1 } from "../kube/client.js";
+
+const BASE = process.env.RABC_DATA_DIR;
+
+/**
+ * Create + auto-approve + auto-sign a Kubernetes user certificate
+ */
+export async function createUserCert(username, groups = []) {
+  const dir = path.join(BASE, "users", username);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const key = path.join(dir, `${username}.key`);
+  const csr = path.join(dir, `${username}.csr`);
+  const crt = path.join(dir, `${username}.crt`);
+
+  const sanitizeName = (name) =>
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/^-+/, "")
+      .replace(/-+$/, "");
+
+  const csrName = sanitizeName(`${username}-csr`);
+
+  console.log(`🎯 Creating certificate for user: ${username}`);
+  console.log(`📄 CSR Name: ${csrName}`);
+
+  /* ============================================================
+     1️⃣ Generate private key
+  ============================================================ */
+  execSync(`openssl genrsa -out ${key} 2048`);
+
+  /* ============================================================
+     2️⃣ Generate CSR (CN + O groups)
+  ============================================================ */
+  const subject =
+    `/CN=${username}` + groups.map(g => `/O=${g}`).join("");
+
+  execSync(
+    `openssl req -new -key ${key} -out ${csr} -subj "${subject}"`
+  );
+
+  const csrBody = {
+    apiVersion: "certificates.k8s.io/v1",
+    kind: "CertificateSigningRequest",
+    metadata: { name: csrName },
+    spec: {
+      request: fs.readFileSync(csr).toString("base64"),
+      signerName: "kubernetes.io/kube-apiserver-client",
+      usages: ["client auth"]
+    }
+  };
+
+  /* ============================================================
+     3️⃣ Delete existing CSR (idempotent & SAFE)
+  // ============================================================ */
+  // try {
+  //   await certV1.deleteCertificateSigningRequest({ name: csrName });
+  //   console.log(`♻️ Deleted existing CSR: ${csrName}`);
+  // } catch (e) {
+  //   if (e?.code === 404) {
+  //     console.log(`ℹ️ CSR ${csrName} not found, skipping delete`);
+  //   } else {
+  //     throw e;
+  //   }
+  // }
+
+  /* ============================================================
+     4️⃣ Create CSR
+  ============================================================ */
+  await certV1.createCertificateSigningRequest({
+    body: csrBody
+  });
+
+  console.log(`✅ CSR created: ${csrName}`);
+
+  /* ============================================================
+     5️⃣ Approve CSR (CORRECT way – approval subresource)
+  ============================================================ */
+  console.log(`🟢 Approving CSR: ${csrName}`);
+
+  const approvalPatch = [
+    {
+      op: "add",
+      path: "/status/conditions",
+      value: [
+        {
+          type: "Approved",
+          status: "True",
+          reason: "RABCApprove",
+          message: "Approved by RABC backend",
+          lastUpdateTime: new Date().toISOString(),
+          lastTransitionTime: new Date().toISOString()
+        }
+      ]
+    }
+  ];
+
+  await certV1.patchCertificateSigningRequestApproval({
+    name: csrName,
+    body: approvalPatch,
+    headers: {
+      "Content-Type": "application/json-patch+json"
+    }
+  });
+
+  console.log(`✅ CSR approved`);
+
+  /* ============================================================
+     6️⃣ Wait for certificate to be signed
+  ============================================================ */
+  console.log(`⏳ Waiting for certificate issuance...`);
+
+  let certificate;
+
+  for (let i = 1; i <= 30; i++) {
+    const res = await certV1.readCertificateSigningRequest({
+      name: csrName
+    });
+
+    const csrObj = res.body ?? res;
+    certificate = csrObj.status?.certificate;
+
+    if (certificate) {
+      console.log(`🎉 Certificate issued in ${i * 0.5}s`);
+      break;
+    }
+
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  if (!certificate) {
+    throw new Error("Certificate not signed (check RBAC / signer)");
+  }
+
+  /* ============================================================
+     7️⃣ Write certificate to disk
+  ============================================================ */
+  fs.writeFileSync(
+    crt,
+    Buffer.from(certificate, "base64")
+  );
+
+  console.log(`📁 Certificate stored at: ${dir}`);
+
+  return dir;
+}
+
+===== FILE: ./src/services/kube.service.js =====
+import yaml from "js-yaml";
+import { kc } from "../utils/k8s.js";
+
+export async function applyYAML(yamlText) {
+  const obj = yaml.load(yamlText);
+  const api = kc.makeApiClient(
+    kc.getApiVersion(obj.apiVersion)
+  );
+
+  await api.patch(
+    `/apis/${obj.apiVersion}/namespaces/${obj.metadata.namespace}/${obj.kind.toLowerCase()}s/${obj.metadata.name}`,
+    obj,
+    undefined,
+    undefined,
+    undefined,
+    {
+      headers: {
+        "Content-Type": "application/apply-patch+yaml"
+      }
+    }
+  );
+}
+
+===== FILE: ./src/services/kubeconfig.service.js =====
+import fs from "fs";
+import path from "path";
+import yaml from "js-yaml";
+import kc from "../kube/client.js";
+
+/**
+ * Get current cluster info from kube-api (NO kubectl)
+ */
+function clusterInfo() {
+  const cluster = kc.getCurrentCluster();
+
+  if (!cluster) {
+    throw new Error("No active Kubernetes cluster found in kubeconfig");
+  }
+
+  return {
+    name: cluster.name,
+    server: cluster.server,
+    ca: cluster.caData
+  };
+}
+
+/**
+ * Generate kubeconfig for CERT-based USER
+ */
+export function generateUserKubeconfig(username, certDir) {
+  const cluster = clusterInfo();
+
+  const certPath = path.join(certDir, `${username}.crt`);
+  const keyPath = path.join(certDir, `${username}.key`);
+
+  const clientCertData = fs.readFileSync(certPath).toString("base64");
+  const clientKeyData = fs.readFileSync(keyPath).toString("base64");
+
+  const kubeconfig = {
+    apiVersion: "v1",
+    kind: "Config",
+    clusters: [
+      {
+        name: cluster.name,
+        cluster: {
+          server: cluster.server,
+          "certificate-authority-data": cluster.ca
+        }
+      }
+    ],
+    users: [
+      {
+        name: username,
+        user: {
+          "client-certificate-data": clientCertData,
+          "client-key-data": clientKeyData
+        }
+      }
+    ],
+    contexts: [
+      {
+        name: `${username}@${cluster.name}`,
+        context: {
+          cluster: cluster.name,
+          user: username
+        }
+      }
+    ],
+    "current-context": `${username}@${cluster.name}`
+  };
+
+  const kubeconfigDir = path.join(process.env.RABC_DATA_DIR, "kubeconfigs");
+  fs.mkdirSync(kubeconfigDir, { recursive: true });
+
+  const kubeconfigPath = path.join(kubeconfigDir, `${username}.yaml`);
+
+  fs.writeFileSync(kubeconfigPath, yaml.dump(kubeconfig, { noRefs: true }));
+
+  return kubeconfigPath;
+}
+
+/**
+ * Generate kubeconfig for SERVICE ACCOUNT (token-based)
+ */
+export function generateSAKubeconfig(saName, namespace, token) {
+  const cluster = clusterInfo();
+
+  const kubeconfig = {
+    apiVersion: "v1",
+    kind: "Config",
+    clusters: [
+      {
+        name: cluster.name,
+        cluster: {
+          server: cluster.server,
+          "certificate-authority-data": cluster.ca
+        }
+      }
+    ],
+    users: [
+      {
+        name: `${saName}-${namespace}`,
+        user: { token }
+      }
+    ],
+    contexts: [
+      {
+        name: `${saName}@${cluster.name}`,
+        context: {
+          cluster: cluster.name,
+          user: `${saName}-${namespace}`,
+          namespace
+        }
+      }
+    ],
+    "current-context": `${saName}@${cluster.name}`
+  };
+
+  const kubeconfigDir = path.join(process.env.RABC_DATA_DIR, "kubeconfigs");
+  fs.mkdirSync(kubeconfigDir, { recursive: true });
+
+  const kubeconfigPath = path.join(
+    kubeconfigDir,
+    `sa-${saName}-${namespace}.yaml`
+  );
+
+  const yamlBody = yaml.dump(kubeconfig, { noRefs: true });
+
+  const comments = `# =====================================================
+# Generated by RABC
+# Service Account Kubeconfig
+# Namespace: ${namespace}
+# ServiceAccount: ${saName}
+# =====================================================
+
+`;
+
+  fs.writeFileSync(kubeconfigPath, comments + yamlBody);
+
+  return kubeconfigPath;
+}
+
+===== FILE: ./src/server.js =====
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+import { connectDB } from "./config/db.js";
+
+import userRoutes from "./routes/users.js";
+import groupRoutes from "./routes/groups.js";
+import saRoutes from "./routes/serviceaccounts.js";
+import roleRoutes from "./routes/roles.js";
+import bindingRoutes from "./routes/bindings.js";
+import kubeconfigRoutes from "./routes/kubeconfigs.js";
+import rbacRoutes from "./routes/rbac.js";
+import namespaceRoutes from "./routes/namespaces.js";
+import { KubeConfig } from '@kubernetes/client-node';
+import { createUserCert } from './services/cert.service.js';
+await connectDB();
+
+const kc = new KubeConfig();
+kc.loadFromDefault();
+const app = express();
+
+console.log('Current context:', kc.getCurrentContext());
+console.log('API server:', kc.getCurrentCluster().server);
+app.use(cors());
+app.use(express.json());
+app.use("/api/rbac", rbacRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/groups", groupRoutes);
+app.use("/api/serviceaccounts", saRoutes);
+app.use("/api/roles", roleRoutes);
+app.use("/api/bindings", bindingRoutes);
+app.use("/api/kubeconfigs", kubeconfigRoutes);
+app.use("/api/namespaces", namespaceRoutes);
+
+
+// Test endpoint
+app.post('/api/test-cert', async (req, res) => {
+  try {
+    const { username } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required' });
+    }
+    
+    console.log(`Testing certificate creation for: ${username}`);
+    const result = await createUserCert(username, ['rabc-users']);
+    
+    res.json({ 
+      success: true, 
+      message: 'Certificate created successfully',
+      path: result 
+    });
+  } catch (error) {
+    console.error('Test endpoint error:', error);
+    res.status(500).json({ 
+      error: 'Failed to create certificate',
+      details: error.message 
+    });
+  }
+});
+
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () =>
+  console.log(` RABC backend running on port ${PORT}`)
+);
+
+
+//  Express error handler
+app.use((err, req, res, next) => {
+  console.error(" Express Error:", err);
+  res.status(500).json({ success: false, error: err.message });
+});
+
+//  Promise rejections
+process.on("unhandledRejection", (reason) => {
+  console.error(" UNHANDLED PROMISE REJECTION");
+  console.error(reason);
+});
+
+//  Uncaught exceptions
+process.on("uncaughtException", (err) => {
+  console.error(" UNCAUGHT EXCEPTION");
+  console.error(err);
+});
+===== FILE: ./src/config/db.js =====
+import mongoose from "mongoose";
+
+export async function connectDB() {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) throw new Error("MONGODB_URI not set");
+
+  await mongoose.connect(uri);
+  console.log("✅ MongoDB connected");
+}
+
+===== FILE: ./src/config/kube.js =====
+export const KUBECONFIG = process.env.KUBECONFIG;
+
+===== FILE: ./src/models/Group.js =====
+import mongoose from "mongoose";
+
+export default mongoose.model(
+  "Group",
+  new mongoose.Schema({
+    name: {
+      type: String,
+      unique: true,
+      required: true
+    },
+
+    // 🔑 REQUIRED — this was missing
+    users: {
+      type: [String],
+      default: []
+    },
+
+    description: String,
+
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  })
+);
+
+===== FILE: ./src/models/ClusterRoleBinding.js =====
+import mongoose from "mongoose";
+
+export default mongoose.model(
+  "ClusterRoleBinding",
+  new mongoose.Schema({
+    name: { type: String, unique: true },
+    roleRef: Object,
+    subjects: Array,
+    createdAt: { type: Date, default: Date.now }
+  })
+);
+
+===== FILE: ./src/models/AuditLog.js =====
+import mongoose from "mongoose";
+
+export default mongoose.model(
+  "AuditLog",
+  new mongoose.Schema({
+    action: {
+      type: String,
+      required: true
+    },
+
+    entityType: {
+      type: String,
+      required: true
+    },
+
+    entityId: {
+      type: String,
+      required: true
+    },
+
+    // Who performed the action (future: JWT user)
+    actor: {
+      type: String,
+      default: "system"
+    },
+
+    // Any extra info (groups, namespace, etc.)
+    metadata: {
+      type: Object
+    },
+
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  })
+);
+
+===== FILE: ./src/models/RoleBinding.js =====
+import mongoose from "mongoose";
+
+export default mongoose.model(
+  "RoleBinding",
+  new mongoose.Schema({
+    name: String,
+    namespace: String,
+    roleRef: Object,
+    subjects: Array
+  })
+);
+
+===== FILE: ./src/models/User.js =====
+import mongoose from "mongoose";
+
+export default mongoose.model(
+  "User",
+  new mongoose.Schema({
+    username: {
+      type: String,
+      unique: true,
+      required: true
+    },
+
+    groups: [String],
+
+    certPath: String,
+    kubeconfigPath: String,
+
+    // 🔐 User state
+    status: {
+      type: String,
+      enum: ["active", "disabled"],
+      default: "active"
+    },
+
+    revokedAt: Date,
+
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  })
+);
+
+===== FILE: ./src/models/ClusterRole.js =====
+import mongoose from "mongoose";
+
+export default mongoose.model(
+  "ClusterRole",
+  new mongoose.Schema({
+    name: { type: String, unique: true },
+    rules: Array,
+    createdAt: { type: Date, default: Date.now }
+  })
+);
+
+===== FILE: ./src/models/Role.js =====
+// models/Role.js
+import mongoose from "mongoose";
+
+const RoleSchema = new mongoose.Schema({
+  name: String,
+  namespace: String, // null for ClusterRole
+  rules: Array,
+  type: { type: String, enum: ["Role", "ClusterRole"] },
+  createdAt: { type: Date, default: Date.now }
+});
+
+export default mongoose.model("Role", RoleSchema);
+
+===== FILE: ./src/models/ServiceAccount.js =====
+import mongoose from "mongoose";
+
+export default mongoose.model(
+  "ServiceAccount",
+  new mongoose.Schema({
+    name: String,
+    namespace: String,
+    token: String,
+    kubeconfigPath: String,
+    createdAt: { type: Date, default: Date.now }
+  })
+);
+
+===== FILE: ./src/controllers/kubeconfig.controller.js =====
+import fs from "fs";
+import User from "../models/User.js";
+import ServiceAccount from "../models/ServiceAccount.js";
+
+export async function downloadUserKubeconfig(req, res) {
+  const { username } = req.params;
+
+  const user = await User.findOne({ username });
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  if (!fs.existsSync(user.kubeconfigPath)) {
+    return res.status(404).json({ error: "Kubeconfig file missing" });
+  }
+
+  res.download(user.kubeconfigPath, `${username}-kubeconfig.yaml`);
+}
+
+export async function downloadSAKubeconfig(req, res) {
+  const { name, namespace } = req.params;
+
+  const sa = await ServiceAccount.findOne({ name, namespace });
+  if (!sa) return res.status(404).json({ error: "ServiceAccount not found" });
+
+  if (!fs.existsSync(sa.kubeconfigPath)) {
+    return res.status(404).json({ error: "Kubeconfig file missing" });
+  }
+
+  res.download(
+    sa.kubeconfigPath,
+    `${name}-${namespace}-kubeconfig.yaml`
+  );
+}
+
+===== FILE: ./src/controllers/role.controller.js =====
+import yaml from "js-yaml";
+import { rbacV1 } from "../kube/client.js";
+import RoleBinding from "../models/RoleBinding.js";
+import ClusterRoleBinding from "../models/ClusterRoleBinding.js";
+import Role from "../models/Role.js";
+
+/* ================= CREATE ================= */
+
+export async function createRole(req, res) {
+  const { name, namespaces, namespace, rules } = req.body;
+  const targets = namespaces?.length ? namespaces : [namespace];
+
+  if (!name || !Array.isArray(rules) || rules.length === 0 || !targets?.length) {
+    return res.status(400).json({ error: "Invalid role data" });
+  }
+
+  try {
+    for (const ns of targets) {
+      console.log(`🛠️ Creating Role '${name}' in namespace '${ns}'`);
+
+      await rbacV1.createNamespacedRole({
+        namespace: ns,
+        body: {
+          apiVersion: "rbac.authorization.k8s.io/v1",
+          kind: "Role",
+          metadata: { name },
+          rules
+        }
+      });
+
+      // 🔹 Mirror into DB (upsert-safe)
+      await Role.updateOne(
+        { name, namespace: ns, type: "Role" },
+        {
+          name,
+          namespace: ns,
+          rules,
+          type: "Role"
+        },
+        { upsert: true }
+      );
+
+      console.log(`✅ Role '${name}' created & stored for namespace '${ns}'`);
+    }
+
+    res.json({ success: true, namespaces: targets });
+  } catch (e) {
+    console.error("❌ Failed to create Role:", e?.body || e?.message);
+    res.status(500).json({
+      error: "Failed to create role",
+      details: e?.body || e?.message
+    });
+  }
+}
+
+export async function createClusterRole(req, res) {
+  const { name, rules } = req.body;
+
+  if (!name || !Array.isArray(rules) || rules.length === 0) {
+    return res.status(400).json({ error: "Invalid cluster role data" });
+  }
+
+  try {
+    console.log(`🛠️ Creating ClusterRole '${name}'`);
+
+    await rbacV1.createClusterRole({
+      body: {
+        apiVersion: "rbac.authorization.k8s.io/v1",
+        kind: "ClusterRole",
+        metadata: { name },
+        rules
+      }
+    });
+
+    // 🔹 Mirror into DB
+    await Role.updateOne(
+      { name, type: "ClusterRole" },
+      {
+        name,
+        namespace: null,
+        rules,
+        type: "ClusterRole"
+      },
+      { upsert: true }
+    );
+
+    console.log(`✅ ClusterRole '${name}' created & stored`);
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error("❌ Failed to create ClusterRole:", e?.body || e?.message);
+    res.status(500).json({
+      error: "Failed to create cluster role",
+      details: e?.body || e?.message
+    });
+  }
+}
+
+/* ================= LIST ================= */
+
+export async function listRoles(req, res) {
+  const namespace = req.query.namespace || "default";
+
+  const { body } = await rbacV1.listNamespacedRole({ namespace });
+
+  res.json(
+    (body?.items || []).map(r => ({
+      name: r.metadata.name,
+      namespace: r.metadata.namespace,
+      rules: r.rules
+    }))
+  );
+}
+
+export async function listClusterRoles(req, res) {
+  const { body } = await rbacV1.listClusterRole();
+
+  res.json(
+    (body?.items || []).map(r => ({
+      name: r.metadata.name,
+      rules: r.rules
+    }))
+  );
+}
+
+/* ================= ROLE → BINDINGS ================= */
+
+export async function getRoleBindings(req, res) {
+  const { name, namespace } = req.params;
+
+  const rbs = await RoleBinding.find({
+    namespace,
+    "roleRef.name": name
+  });
+
+  const crbs = await ClusterRoleBinding.find({
+    "roleRef.name": name
+  });
+
+  res.json({
+    roleBindings: rbs,
+    clusterRoleBindings: crbs
+  });
+}
+
+/* ================= ROLE USAGE ================= */
+
+export async function roleUsage(req, res) {
+  const { name } = req.query;
+
+  if (!name) {
+    return res.status(400).json({ error: "role name is required" });
+  }
+
+  const rbs = await RoleBinding.find({ "roleRef.name": name });
+  const crbs = await ClusterRoleBinding.find({ "roleRef.name": name });
+
+  res.json({
+    roleBindings: rbs.length,
+    clusterRoleBindings: crbs.length,
+    total: rbs.length + crbs.length
+  });
+}
+
+/* ================= SAFE DELETE ================= */
+
+export async function deleteRole(req, res) {
+  const { name, namespace, cluster } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ error: "name is required" });
+  }
+
+  const bindings = cluster
+    ? await ClusterRoleBinding.find({ "roleRef.name": name })
+    : await RoleBinding.find({ "roleRef.name": name, namespace });
+
+  if (bindings.length > 0) {
+    return res.status(400).json({
+      error: "Role is still bound",
+      bindings
+    });
+  }
+
+  try {
+    if (cluster) {
+      console.log(`🗑️ Deleting ClusterRole '${name}'`);
+      await rbacV1.deleteClusterRole({ name });
+      await Role.deleteOne({ name, type: "ClusterRole" });
+    } else {
+      console.log(`🗑️ Deleting Role '${name}' from namespace '${namespace}'`);
+      await rbacV1.deleteNamespacedRole({ name, namespace });
+      await Role.deleteOne({ name, namespace, type: "Role" });
+    }
+
+    console.log(`✅ Role '${name}' deleted successfully`);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("❌ Failed to delete role:", e?.body || e?.message);
+    res.status(500).json({
+      error: "Delete failed",
+      details: e?.body || e?.message
+    });
+  }
+}
+
+/* ================= DIFF (API DRY-RUN) ================= */
+
+export async function diffRole(req, res) {
+  try {
+    const { yaml: yamlText } = req.body;
+
+    if (!yamlText) {
+      return res.status(400).json({ error: "YAML required" });
+    }
+
+    const doc = yaml.load(yamlText);
+
+    if (!doc?.kind || !doc?.metadata?.name) {
+      return res.status(400).json({ error: "Invalid RBAC YAML" });
+    }
+
+    const dryRun = ["All"];
+    let result;
+
+    if (doc.kind === "Role") {
+      if (!doc.metadata.namespace) {
+        return res.status(400).json({ error: "Role namespace is required" });
+      }
+
+      result = await rbacV1.replaceNamespacedRole({
+        name: doc.metadata.name,
+        namespace: doc.metadata.namespace,
+        body: doc,
+        dryRun
+      });
+    }
+
+    if (doc.kind === "ClusterRole") {
+      result = await rbacV1.replaceClusterRole({
+        name: doc.metadata.name,
+        body: doc,
+        dryRun
+      });
+    }
+
+    res.json({
+      diff: "Dry-run successful (no changes applied)",
+      serverResponse: result?.body || null
+    });
+  } catch (e) {
+    res.status(400).json({
+      error: "Diff failed",
+      details: e?.body || e?.message
+    });
+  }
+}
+
+===== FILE: ./src/controllers/group.controller.js =====
+import Group from "../models/Group.js";
+
+export async function createGroup(req, res) {
+  const group = await Group.create({
+    name: req.body.name,
+    users: []
+  });
+
+  res.json(group);
+}
+
+export async function listGroups(req, res) {
+  res.json(await Group.find());
+}
+
+export async function addUserToGroup(req, res) {
+  const { group } = req.params;
+  const { user } = req.body;
+
+  if (!user) {
+    return res.status(400).json({ error: "User is required" });
+  }
+
+  const g = await Group.findOne({ name: group });
+  if (!g) {
+    return res.status(404).json({ error: "Group not found" });
+  }
+
+  // 🛡️ Always safe now
+  if (!g.users.includes(user)) {
+    g.users.push(user);
+    await g.save();
+  }
+
+  res.json(g);
+}
+
+===== FILE: ./src/controllers/user.controller.js =====
+import fs from "fs";
+import User from "../models/User.js";
+import RoleBinding from "../models/RoleBinding.js";
+import ClusterRoleBinding from "../models/ClusterRoleBinding.js";
+import AuditLog from "../models/AuditLog.js";
+
+import { createUserCert } from "../services/cert.service.js";
+import { generateUserKubeconfig } from "../services/kubeconfig.service.js";
+import { run } from "../utils/exec.js";
+
+/**
+ * CREATE USER (API-SAFE, KUBECTL-COMPATIBLE)
+ */
+export async function createUser(req, res) {
+  const { username, groups } = req.body;
+
+  if (!username) {
+    return res.status(400).json({ error: "username is required" });
+  }
+
+  // ✅ DB is the source of truth (kubectl never enforced this)
+  const existing = await User.findOne({ username });
+  if (existing) {
+    console.warn(`⚠️ User already exists: ${username}`);
+    return res.status(409).json({
+      error: "User already exists",
+      username
+    });
+  }
+
+  // 🔐 Same logic as before (unchanged)
+  const certDir = await createUserCert(username, groups || []);
+  const kubeconfigPath = generateUserKubeconfig(username, certDir);
+
+  const user = await User.create({
+    username,
+    groups,
+    certPath: certDir,
+    kubeconfigPath,
+    status: "active"
+  });
+
+  await AuditLog.create({
+    action: "USER_CREATED",
+    entityType: "User",
+    entityId: username,
+    metadata: { groups }
+  });
+
+  res.json(user);
+}
+
+
+
+/**
+ * LIST USERS
+ */
+export async function listUsers(req, res) {
+  res.json(await User.find());
+}
+
+/**
+ * SOFT REVOKE (DISABLE USER)
+ */
+export async function disableUser(req, res) {
+  const { username } = req.params;
+
+  const user = await User.findOne({ username });
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  if (user.status === "disabled") {
+    return res.json({ message: "User already disabled" });
+  }
+
+  const subjectsToRevoke = [username, ...(user.groups || [])];
+
+  // Remove RoleBindings
+  const roleBindings = await RoleBinding.find({
+    "subjects.name": { $in: subjectsToRevoke }
+  });
+
+  for (const rb of roleBindings) {
+    run(`kubectl delete rolebinding ${rb.name} -n ${rb.namespace}`);
+    await rb.deleteOne();
+  }
+
+  // Remove ClusterRoleBindings
+  const clusterRoleBindings = await ClusterRoleBinding.find({
+    "subjects.name": { $in: subjectsToRevoke }
+  });
+
+  for (const crb of clusterRoleBindings) {
+    run(`kubectl delete clusterrolebinding ${crb.name}`);
+    await crb.deleteOne();
+  }
+
+  // Delete cert & kubeconfig
+  if (user.certPath && fs.existsSync(user.certPath)) {
+    fs.rmSync(user.certPath, { recursive: true, force: true });
+  }
+
+  if (user.kubeconfigPath && fs.existsSync(user.kubeconfigPath)) {
+    fs.unlinkSync(user.kubeconfigPath);
+  }
+
+  user.status = "disabled";
+  user.revokedAt = new Date();
+  user.certPath = null;
+  user.kubeconfigPath = null;
+
+  await user.save();
+
+  await AuditLog.create({
+    action: "USER_DISABLED",
+    entityType: "User",
+    entityId: username,
+    metadata: { groups: user.groups }
+  });
+
+  res.json({
+    message: `User '${username}' disabled (soft revoke)`
+  });
+}
+
+/**
+ * RE-ENABLE USER (ROTATE CERT + KUBECONFIG)
+ */
+export async function enableUser(req, res) {
+  const { username } = req.params;
+
+  const user = await User.findOne({ username });
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  if (user.status === "active") {
+    return res.json({ message: "User already active" });
+  }
+
+  // 🔁 Rotate cert (FIXED)
+  const certDir = await createUserCert(username, user.groups || []);
+  const kubeconfigPath = generateUserKubeconfig(username, certDir);
+
+  user.certPath = certDir;
+  user.kubeconfigPath = kubeconfigPath;
+  user.status = "active";
+  user.revokedAt = null;
+
+  await user.save();
+
+  await AuditLog.create({
+    action: "USER_REENABLED",
+    entityType: "User",
+    entityId: username,
+    metadata: { groups: user.groups }
+  });
+
+  res.json({
+    message: `User '${username}' re-enabled successfully`,
+    kubeconfigPath
+  });
+}
+
+/**
+ * HARD DELETE (PERMANENT REVOKE)
+ */
+export async function deleteUser(req, res) {
+  const { username } = req.params;
+
+  const user = await User.findOne({ username });
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  const subjectsToRevoke = [username, ...(user.groups || [])];
+
+  const roleBindings = await RoleBinding.find({
+    "subjects.name": { $in: subjectsToRevoke }
+  });
+
+  for (const rb of roleBindings) {
+    run(`kubectl delete rolebinding ${rb.name} -n ${rb.namespace}`);
+    await rb.deleteOne();
+  }
+
+  const clusterRoleBindings = await ClusterRoleBinding.find({
+    "subjects.name": { $in: subjectsToRevoke }
+  });
+
+  for (const crb of clusterRoleBindings) {
+    run(`kubectl delete clusterrolebinding ${crb.name}`);
+    await crb.deleteOne();
+  }
+
+  if (user.certPath && fs.existsSync(user.certPath)) {
+    fs.rmSync(user.certPath, { recursive: true, force: true });
+  }
+
+  if (user.kubeconfigPath && fs.existsSync(user.kubeconfigPath)) {
+    fs.unlinkSync(user.kubeconfigPath);
+  }
+
+  await user.deleteOne();
+
+  await AuditLog.create({
+    action: "USER_DELETED",
+    entityType: "User",
+    entityId: username,
+    metadata: { groups: user.groups }
+  });
+
+  res.json({
+    message: `User '${username}' deleted permanently`
+  });
+}
+
+===== FILE: ./src/controllers/sa.controller.js =====
+import { coreV1 } from "../kube/client.js";
+import ServiceAccount from "../models/ServiceAccount.js";
+import { generateSAKubeconfig } from "../services/kubeconfig.service.js";
+
+export async function createSA(req, res) {
+  const { name, namespace } = req.body;
+
+  await coreV1.createNamespacedServiceAccount(namespace, {
+    metadata: { name }
+  });
+
+  const { body } =
+    await coreV1.createNamespacedServiceAccountToken(
+      name,
+      namespace,
+      { spec: {} }
+    );
+
+  const token = body.status.token;
+  const kubeconfigPath = generateSAKubeconfig(name, namespace, token);
+
+  const sa = await ServiceAccount.create({
+    name,
+    namespace,
+    token,
+    kubeconfigPath
+  });
+
+  res.json(sa);
+}
+
+export async function listSA(req, res) {
+  res.json(await ServiceAccount.find());
+}
+
+===== FILE: ./src/controllers/binding.controller.js =====
+import yaml from "js-yaml";
+import { rbacV1 } from "../kube/client.js";
+import RoleBinding from "../models/RoleBinding.js";
+import ClusterRoleBinding from "../models/ClusterRoleBinding.js";
+
+/* ================= CREATE ================= */
+
+export async function createRoleBinding(req, res) {
+  const { name, namespace, subjects, roleRef } = req.body;
+
+  if (!name || !namespace || !subjects || !roleRef) {
+    return res.status(400).json({ error: "Invalid RoleBinding data" });
+  }
+
+  const body = {
+    apiVersion: "rbac.authorization.k8s.io/v1",
+    kind: "RoleBinding",
+    metadata: { name, namespace },
+    subjects,
+    roleRef
+  };
+
+  try {
+    // 1️⃣ Create in Kubernetes
+    await rbacV1.createNamespacedRoleBinding({
+      namespace,
+      body
+    });
+
+    console.log(`🔗 RoleBinding created in cluster: ${name} (ns=${namespace})`);
+
+    // 2️⃣ Mirror into DB
+    const dbBinding = await RoleBinding.updateOne(
+      { name, namespace },
+      { name, namespace, subjects, roleRef },
+      { upsert: true }
+    );
+
+    console.log(`💾 RoleBinding stored in DB: ${name} (ns=${namespace})`);
+
+    res.json({
+      success: true,
+      name,
+      namespace
+    });
+  } catch (e) {
+    console.error("❌ Failed to create RoleBinding", e.body || e.message);
+    res.status(400).json({
+      error: "Failed to create RoleBinding",
+      details: e.body || e.message
+    });
+  }
+}
+
+export async function createClusterRoleBinding(req, res) {
+  const { name, subjects, roleRef } = req.body;
+
+  if (!name || !subjects || !roleRef) {
+    return res.status(400).json({ error: "Invalid ClusterRoleBinding data" });
+  }
+
+  const body = {
+    apiVersion: "rbac.authorization.k8s.io/v1",
+    kind: "ClusterRoleBinding",
+    metadata: { name },
+    subjects,
+    roleRef
+  };
+
+  try {
+    // 1️⃣ Create in Kubernetes
+    await rbacV1.createClusterRoleBinding({ body });
+
+    console.log(`🔗 ClusterRoleBinding created in cluster: ${name}`);
+
+    // 2️⃣ Mirror into DB
+    await ClusterRoleBinding.updateOne(
+      { name },
+      { name, subjects, roleRef },
+      { upsert: true }
+    );
+
+    console.log(`💾 ClusterRoleBinding stored in DB: ${name}`);
+
+    res.json({
+      success: true,
+      name
+    });
+  } catch (e) {
+    console.error("❌ Failed to create ClusterRoleBinding", e.body || e.message);
+    res.status(400).json({
+      error: "Failed to create ClusterRoleBinding",
+      details: e.body || e.message
+    });
+  }
+}
+
+/* ================= LIST ================= */
+
+export async function listRoleBindings(req, res) {
+  res.json(await RoleBinding.find());
+}
+
+export async function listClusterRoleBindings(req, res) {
+  res.json(await ClusterRoleBinding.find());
+}
+
+/* ================= GET YAML ================= */
+
+export async function getBindingYAML(req, res) {
+  const { name } = req.params;
+  const { namespace } = req.query;
+
+  try {
+    if (namespace) {
+      const { body } = await rbacV1.readNamespacedRoleBinding({
+        name,
+        namespace
+      });
+
+      return res.json({
+        yaml: yaml.dump(body, { noRefs: true })
+      });
+    }
+
+    const { body } = await rbacV1.readClusterRoleBinding({ name });
+
+    res.json({
+      yaml: yaml.dump(body, { noRefs: true })
+    });
+  } catch (e) {
+    console.error("❌ Failed to fetch binding YAML", e.body || e.message);
+    res.status(404).json({
+      error: "Binding not found",
+      details: e.body || e.message
+    });
+  }
+}
+
+/* ================= APPLY YAML ================= */
+
+export async function applyBindingYAML(req, res) {
+  try {
+    const { yaml: yamlText } = req.body;
+    if (!yamlText) {
+      return res.status(400).json({ error: "YAML required" });
+    }
+
+    const doc = yaml.load(yamlText);
+
+    if (!doc?.kind || !doc?.metadata?.name) {
+      return res.status(400).json({ error: "Invalid YAML" });
+    }
+
+    if (doc.kind === "RoleBinding") {
+      await rbacV1.replaceNamespacedRoleBinding({
+        name: doc.metadata.name,
+        namespace: doc.metadata.namespace,
+        body: doc
+      });
+
+      await RoleBinding.updateOne(
+        { name: doc.metadata.name, namespace: doc.metadata.namespace },
+        {
+          name: doc.metadata.name,
+          namespace: doc.metadata.namespace,
+          subjects: doc.subjects,
+          roleRef: doc.roleRef
+        },
+        { upsert: true }
+      );
+
+      console.log(
+        `🔁 RoleBinding applied via YAML: ${doc.metadata.name} (ns=${doc.metadata.namespace})`
+      );
+    }
+
+    if (doc.kind === "ClusterRoleBinding") {
+      await rbacV1.replaceClusterRoleBinding({
+        name: doc.metadata.name,
+        body: doc
+      });
+
+      await ClusterRoleBinding.updateOne(
+        { name: doc.metadata.name },
+        {
+          name: doc.metadata.name,
+          subjects: doc.subjects,
+          roleRef: doc.roleRef
+        },
+        { upsert: true }
+      );
+
+      console.log(
+        `🔁 ClusterRoleBinding applied via YAML: ${doc.metadata.name}`
+      );
+    }
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error("❌ Failed to apply binding YAML", e.body || e.message);
+    res.status(400).json({
+      error: "Apply failed",
+      details: e.body || e.message
+    });
+  }
+}
+
+/* ================= DELETE ================= */
+
+export async function deleteBinding(req, res) {
+  const { name, namespace, cluster } = req.body;
+
+  try {
+    if (cluster) {
+      await rbacV1.deleteClusterRoleBinding({ name });
+      await ClusterRoleBinding.deleteOne({ name });
+
+      console.log(`🗑️ ClusterRoleBinding deleted: ${name}`);
+    } else {
+      await rbacV1.deleteNamespacedRoleBinding({ name, namespace });
+      await RoleBinding.deleteOne({ name, namespace });
+
+      console.log(`🗑️ RoleBinding deleted: ${name} (ns=${namespace})`);
+    }
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error("❌ Failed to delete binding", e.body || e.message);
+    res.status(400).json({
+      error: "Delete failed",
+      details: e.body || e.message
+    });
+  }
+}
+
+===== FILE: ./src/controllers/rbac.controller.js =====
+import { authV1 } from "../kube/client.js";
+import User from "../models/User.js";
+
+/**
+ * RBAC Permission Simulator
+ * EXACT kubectl auth can-i equivalent
+ */
+export async function canI(req, res) {
+  const { username, verb, resource, namespace, apiGroup } = req.body;
+
+  if (!username || !verb || !resource) {
+    return res.status(400).json({ error: "Missing fields" });
+  }
+
+  const user = await User.findOne({ username });
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  /* ============================================================
+     SubjectAccessReview (spec.user is REQUIRED by API)
+     kubectl uses the caller user here (kubernetes-admin)
+  ============================================================ */
+
+  const review = {
+    apiVersion: "authorization.k8s.io/v1",
+    kind: "SubjectAccessReview",
+    spec: {
+      user: "kubernetes-admin", // ✅ REQUIRED (dummy, overridden by impersonation)
+      resourceAttributes: {
+        verb,
+        resource,
+        namespace: namespace || undefined,
+        group:
+          apiGroup && apiGroup !== "" && apiGroup !== "core"
+            ? apiGroup
+            : undefined
+      }
+    }
+  };
+
+  /* ============================================================
+     Impersonation headers (REAL subject)
+  ============================================================ */
+
+  const headers = {
+    "Impersonate-User": username
+  };
+
+  if (Array.isArray(user.groups) && user.groups.length > 0) {
+    headers["Impersonate-Group"] = user.groups;
+  }
+
+  /* ============================================================
+     Call Kubernetes API
+  ============================================================ */
+
+  const { body } = await authV1.createSubjectAccessReview({
+    body: review,
+    headers
+  });
+
+  const allowed = body?.status?.allowed === true;
+
+  /* ============================================================
+     Console diagnostics
+  ============================================================ */
+
+  console.log("🔍 RBAC CHECK (IMPERSONATION)");
+  console.log("────────────────────────────────");
+  console.log(`👤 User      : ${username}`);
+  console.log(`👥 Groups    : ${(user.groups || []).join(", ") || "-"}`);
+  console.log(`🔧 Verb      : ${verb}`);
+  console.log(`📦 Resource  : ${resource}`);
+  console.log(`🧩 API Group : ${apiGroup || "core"}`);
+  console.log(`📍 Namespace : ${namespace || "-"}`);
+  console.log(`✅ Allowed   : ${allowed}`);
+  console.log(`📛 Reason    : ${body?.status?.reason || "-"}`);
+  console.log("────────────────────────────────\n");
+
+  res.json({
+    allowed,
+    reason: body?.status?.reason || null,
+    user: username,
+    groups: user.groups || [],
+    verb,
+    resource,
+    apiGroup: apiGroup || "core",
+    namespace: namespace || null
+  });
+}
+
+===== FILE: ./src/utils/exec.js =====
+import { execSync } from "child_process";
+
+/**
+ * Run command and print output (no return)
+ */
+export function run(cmd) {
+  const kubeconfig = process.env.KUBECONFIG;
+  const context = process.env.KUBE_CONTEXT;
+
+  let finalCmd = cmd;
+
+  if (cmd.startsWith("kubectl")) {
+    finalCmd = `kubectl --kubeconfig ${kubeconfig} --context ${context} ${cmd.replace(
+      /^kubectl\s*/,
+      ""
+    )}`;
+  }
+
+  console.log("▶", finalCmd);
+
+  execSync(finalCmd, {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      KUBECONFIG: kubeconfig,
+      HOME: process.env.HOME
+    }
+  });
+}
+
+/**
+ * Run command and return stdout (string)
+ */
+export function runOut(cmd) {
+  const kubeconfig = process.env.KUBECONFIG;
+  const context = process.env.KUBE_CONTEXT;
+
+  let finalCmd = cmd;
+
+  if (cmd.startsWith("kubectl")) {
+    finalCmd = `kubectl --kubeconfig ${kubeconfig} --context ${context} ${cmd.replace(
+      /^kubectl\s*/,
+      ""
+    )}`;
+  }
+
+  return execSync(finalCmd, {
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      KUBECONFIG: kubeconfig,
+      HOME: process.env.HOME
+    }
+  }).trim();
+}
+
+===== FILE: ./src/utils/cache.js =====
+import NodeCache from "node-cache";
+
+export const cache = new NodeCache({
+  stdTTL: 30,          // 30 seconds default
+  checkperiod: 60
+});
+
+export function cached(key, fetcher, ttl = 30) {
+  const hit = cache.get(key);
+  if (hit) return Promise.resolve(hit);
+
+  return fetcher().then(data => {
+    cache.set(key, data, ttl);
+    return data;
+  });
+}
+
+===== FILE: ./src/kube/client.js =====
+import * as k8s from "@kubernetes/client-node";
+
+const kc = new k8s.KubeConfig();
+
+if (process.env.KUBECONFIG) {
+  kc.loadFromFile(process.env.KUBECONFIG);
+} else {
+  kc.loadFromDefault();
+}
+
+if (process.env.KUBE_CONTEXT) {
+  kc.setCurrentContext(process.env.KUBE_CONTEXT);
+}
+
+export const coreV1 = kc.makeApiClient(k8s.CoreV1Api);
+export const rbacV1 = kc.makeApiClient(k8s.RbacAuthorizationV1Api);
+export const authV1 = kc.makeApiClient(k8s.AuthorizationV1Api);
+export const certV1 = kc.makeApiClient(k8s.CertificatesV1Api);
+
+export default kc;
+

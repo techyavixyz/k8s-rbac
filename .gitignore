@@ -1,3 +1,4 @@
-# Build folder and log file
-build/
-build.log
+config
+kube-api-backend/node_modules/
+kube-api-backend/package-lock.json
+
