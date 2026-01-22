@@ -1,0 +1,8 @@
+find . -type f \
+  -not -path "./node_modules/*" \
+  -not -name "package-lock.json" \
+  -exec sh -c '
+    echo "===== FILE: {} ====="
+    cat "{}"
+    echo
+  ' \; > all_files_dump.txt

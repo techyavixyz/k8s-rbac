@@ -1,4 +1,5 @@
 config
 kube-api-backend/node_modules/
 kube-api-backend/package-lock.json
+rabc-ui/node_modules/
 
