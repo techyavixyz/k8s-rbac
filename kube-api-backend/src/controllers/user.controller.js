@@ -205,10 +205,16 @@ export async function enableUser(req, res) {
   console.log(`📜 [AUDIT] USER_REENABLED → ${username}`);
   console.log(`✅ [ENABLE USER] Completed for ${username}\n`);
 
+  // res.json({
+  //   message: `User '${username}' re-enabled successfully`,
+  //   kubeconfigPath
+  // });
+
   res.json({
     message: `User '${username}' re-enabled successfully`,
-    kubeconfigPath
+    user
   });
+  
 }
 
 /* ============================================================

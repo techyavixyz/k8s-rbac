@@ -23,10 +23,16 @@ export async function createUserCert(username, groups = []) {
       .replace(/^-+/, "")
       .replace(/-+$/, "");
 
-  const csrName = sanitizeName(`${username}-csr`);
+  // const csrName = sanitizeName(`${username}-csr`);
 
-  console.log(`🎯 Creating certificate for user: ${username}`);
-  console.log(`📄 CSR Name: ${csrName}`);
+  // console.log(`🎯 Creating certificate for user: ${username}`);
+  // console.log(`📄 CSR Name: ${csrName}`);
+
+const csrName = sanitizeName(`${username}-csr-${Date.now()}`);
+
+console.log(`🎯 Creating certificate for user: ${username}`);
+console.log(`📄 CSR Name: ${csrName}`);
+
 
   /* ============================================================
      1️⃣ Generate private key

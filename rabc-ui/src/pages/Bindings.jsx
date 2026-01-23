@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "../api";
 import { useCatalogs } from "../hooks/useCatalogs";
+import { Link2, Plus, Code, Save, Edit2, Trash2 } from "lucide-react";
+import PageHeader from "../components/PageHeader";
 
-export default function Bindings() {
+export default function Bindings({ collapsed, setCollapsed }) {
   const { users, groups, roles } = useCatalogs();
 
   const [existing, setExisting] = useState([]);
+  const [showForm, setShowForm] = useState(false);
 
   const [data, setData] = useState({
     name: "",
@@ -18,8 +21,6 @@ export default function Bindings() {
   const [advancedMode, setAdvancedMode] = useState(false);
   const [yamlOverride, setYamlOverride] = useState("");
 
-  /* ---------------- LOAD EXISTING BINDINGS ---------------- */
-
   const loadExisting = async () => {
     const [rb, crb] = await Promise.all([
       apiGet("/bindings/rolebindings"),
@@ -31,8 +32,6 @@ export default function Bindings() {
   useEffect(() => {
     loadExisting();
   }, []);
-
-  /* ---------------- LOAD INTO EDITOR ---------------- */
 
   const loadBinding = (b) => {
     const subject = b.subjects?.[0];
@@ -47,9 +46,8 @@ export default function Bindings() {
 
     setAdvancedMode(false);
     setYamlOverride("");
+    setShowForm(true);
   };
-
-  /* ---------------- YAML PREVIEW ---------------- */
 
   const generatedYaml = useMemo(() => `
 apiVersion: rbac.authorization.k8s.io/v1
@@ -66,8 +64,6 @@ roleRef:
   name: ${data.role || "<role>"}
   apiGroup: rbac.authorization.k8s.io
 `.trim(), [data]);
-
-  /* ---------------- CREATE FROM UI ---------------- */
 
   const bind = async () => {
     const endpoint = data.namespace
@@ -89,11 +85,11 @@ roleRef:
       }]
     });
 
-    alert("Binding created");
+    alert("Binding created successfully");
+    setShowForm(false);
+    setData({ name: "", role: "", subject: "", kind: "User", namespace: "" });
     loadExisting();
   };
-
-  /* ---------------- APPLY YAML ---------------- */
 
   const applyYamlOverride = async () => {
     if (!yamlOverride.trim()) {
@@ -101,11 +97,11 @@ roleRef:
     }
 
     await apiPost("/bindings/apply-yaml", { yaml: yamlOverride });
-    alert("YAML applied");
+    alert("YAML applied successfully");
+    setShowForm(false);
     loadExisting();
   };
 
-  /* NEW: delete binding */
   const deleteBinding = async (b) => {
     if (!confirm(`Delete binding '${b.name}'?`)) return;
 
@@ -119,110 +115,241 @@ roleRef:
   };
 
   return (
-    <div>
-      <h3>Create Binding</h3>
-
-      <label>
-        <input
-          type="checkbox"
-          checked={advancedMode}
-          onChange={e => setAdvancedMode(e.target.checked)}
-        />
-        Advanced YAML editor
-      </label>
-
-      <hr />
-
-      {!advancedMode && (
-        <>
-          <input
-            placeholder="binding name"
-            value={data.name}
-            onChange={e => setData({ ...data, name: e.target.value })}
-          />
-
-          <input
-            list="roles"
-            placeholder="role name (select or type)"
-            value={data.role}
-            onChange={e => setData({ ...data, role: e.target.value })}
-          />
-          <datalist id="roles">
-            {roles.map(r => <option key={r} value={r} />)}
-          </datalist>
-
-          <input
-            list="subjects"
-            placeholder="user / group"
-            value={data.subject}
-            onChange={e => setData({ ...data, subject: e.target.value })}
-          />
-          <datalist id="subjects">
-            {users.map(u => <option key={u} value={u} />)}
-            {groups.map(g => <option key={g} value={g} />)}
-          </datalist>
-
-          <select
-            value={data.kind}
-            onChange={e => setData({ ...data, kind: e.target.value })}
+    <div className="h-full flex flex-col">
+      <PageHeader 
+        title="Role Bindings"
+        description="Connect roles with users, groups, or service accounts"
+        collapsed={collapsed}
+        setCollapsed={setCollapsed}
+        action={
+          <button
+            onClick={() => {
+              setShowForm(!showForm);
+              setAdvancedMode(false);
+              setYamlOverride("");
+            }}
+            className="btn btn-primary flex items-center space-x-2"
+            data-testid="create-binding-btn"
           >
-            <option>User</option>
-            <option>Group</option>
-            <option>ServiceAccount</option>
-          </select>
+            <Plus className="w-4 h-4" />
+            <span>Create Binding</span>
+          </button>
+        }
+      />
 
-          <input
-            placeholder="namespace (optional)"
-            value={data.namespace}
-            onChange={e => setData({ ...data, namespace: e.target.value })}
-          />
+      <div className="flex-1 overflow-auto p-6">
+        <div className="max-w-7xl mx-auto space-y-6">
+          {/* Create/Edit Form */}
+          {showForm && (
+            <div className="card">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-semibold text-gray-900">Create Role Binding</h3>
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={advancedMode}
+                    onChange={e => setAdvancedMode(e.target.checked)}
+                    className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+                  />
+                  <span className="text-sm text-gray-700 flex items-center space-x-1">
+                    <Code className="w-4 h-4" />
+                    <span>Advanced YAML editor</span>
+                  </span>
+                </label>
+              </div>
 
-          <button onClick={bind}>Bind</button>
+              {!advancedMode ? (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Binding Name
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Enter binding name"
+                        value={data.name}
+                        onChange={e => setData({ ...data, name: e.target.value })}
+                        className="input"
+                        data-testid="binding-name-input"
+                      />
+                    </div>
 
-          <h4>Generated YAML (read-only)</h4>
-          <pre style={{ background: "#f3f4f6", padding: 12 }}>
-            {generatedYaml}
-          </pre>
-        </>
-      )}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Role Name
+                      </label>
+                      <input
+                        list="roles"
+                        placeholder="Select or type role"
+                        value={data.role}
+                        onChange={e => setData({ ...data, role: e.target.value })}
+                        className="input"
+                        data-testid="binding-role-input"
+                      />
+                      <datalist id="roles">
+                        {roles.map(r => <option key={r} value={r} />)}
+                      </datalist>
+                    </div>
 
-      {advancedMode && (
-        <>
-          <h4>Advanced YAML Editor</h4>
-          <textarea
-            rows={20}
-            style={{ width: "100%" }}
-            value={yamlOverride || generatedYaml}
-            onChange={e => setYamlOverride(e.target.value)}
-          />
-          <br />
-          <button onClick={applyYamlOverride}>Apply YAML</button>
-        </>
-      )}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Subject (User/Group)
+                      </label>
+                      <input
+                        list="subjects"
+                        placeholder="Select or type user/group"
+                        value={data.subject}
+                        onChange={e => setData({ ...data, subject: e.target.value })}
+                        className="input"
+                        data-testid="binding-subject-input"
+                      />
+                      <datalist id="subjects">
+                        {users.map(u => <option key={u} value={u} />)}
+                        {groups.map(g => <option key={g} value={g} />)}
+                      </datalist>
+                    </div>
 
-      <hr />
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Subject Type
+                      </label>
+                      <select
+                        value={data.kind}
+                        onChange={e => setData({ ...data, kind: e.target.value })}
+                        className="input"
+                      >
+                        <option>User</option>
+                        <option>Group</option>
+                        <option>ServiceAccount</option>
+                      </select>
+                    </div>
+                  </div>
 
-      <h3>Existing Bindings</h3>
-      <ul>
-        {existing.map(b => (
-          <li key={b.name}>
-            {b.name} → {b.roleRef?.name}
-            {b.namespace && ` (${b.namespace})`}
-            <button style={{ marginLeft: 6 }} onClick={() => loadBinding(b)}>
-              Load
-            </button>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Namespace (optional - leave empty for ClusterRoleBinding)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Enter namespace"
+                      value={data.namespace}
+                      onChange={e => setData({ ...data, namespace: e.target.value })}
+                      className="input"
+                      data-testid="binding-namespace-input"
+                    />
+                  </div>
 
-            {/* NEW: delete binding */}
-            <button
-              className="danger"
-              style={{ marginLeft: 6 }}
-              onClick={() => deleteBinding(b)}
-            >
-              Delete
-            </button>
-          </li>
-        ))}
-      </ul>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Generated YAML
+                    </label>
+                    <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto text-xs">
+                      {generatedYaml}
+                    </pre>
+                  </div>
+
+                  <div className="flex space-x-3">
+                    <button onClick={bind} className="btn btn-primary flex items-center space-x-2">
+                      <Save className="w-4 h-4" />
+                      <span>Create Binding</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowForm(false);
+                        setData({ name: "", role: "", subject: "", kind: "User", namespace: "" });
+                      }}
+                      className="btn btn-secondary"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      YAML Editor
+                    </label>
+                    <textarea
+                      rows={20}
+                      value={yamlOverride || generatedYaml}
+                      onChange={e => setYamlOverride(e.target.value)}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 font-mono text-sm bg-gray-900 text-gray-100"
+                    />
+                  </div>
+                  <div className="flex space-x-3">
+                    <button onClick={applyYamlOverride} className="btn btn-primary">
+                      Apply YAML
+                    </button>
+                    <button onClick={() => setShowForm(false)} className="btn btn-secondary">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Existing Bindings */}
+          <div className="card">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center space-x-2">
+              <Link2 className="w-5 h-5 text-primary-600" />
+              <span>Existing Bindings</span>
+            </h3>
+            <div className="space-y-3">
+              {existing.length > 0 ? (
+                existing.map(b => (
+                  <div
+                    key={b.name}
+                    className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                    data-testid={`binding-${b.name}`}
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-3">
+                        <p className="font-medium text-gray-900">{b.name}</p>
+                        {b.namespace ? (
+                          <span className="badge badge-primary">{b.namespace}</span>
+                        ) : (
+                          <span className="badge badge-warning">ClusterRoleBinding</span>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Role: <span className="font-medium">{b.roleRef?.name}</span>
+                      </p>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => loadBinding(b)}
+                        className="btn btn-sm btn-ghost"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => deleteBinding(b)}
+                        className="btn btn-sm btn-ghost text-red-600 hover:bg-red-50"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-12">
+                  <Link2 className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                  <p className="text-gray-500">No bindings created yet</p>
+                  <button
+                    onClick={() => setShowForm(true)}
+                    className="btn btn-primary mt-4"
+                  >
+                    Create Your First Binding
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

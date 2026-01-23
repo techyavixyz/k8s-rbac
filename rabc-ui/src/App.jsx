@@ -1,5 +1,5 @@
 import { useState } from "react";
-import Navbar from "./components/Navbar";
+import Sidebar from "./components/Sidebar";
 
 import Users from "./pages/Users";
 import Groups from "./pages/Groups";
@@ -10,30 +10,38 @@ import Audit from "./pages/Audit";
 import RBACGraph from "./pages/RBACGraph";
 import PermissionSimulator from "./pages/PermissionSimulator";
 
-
-
 export default function App() {
   const [page, setPage] = useState("users");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const render = () => {
+    const props = { collapsed: sidebarCollapsed, setCollapsed: setSidebarCollapsed };
+    
     switch (page) {
-      case "users": return <Users />;
-      case "groups": return <Groups />;
-      case "roles": return <Roles />;
-      case "bindings": return <Bindings />;
-      case "serviceaccounts": return <ServiceAccounts />;
-      case "audit": return <Audit />;
-      case "rbac": return <RBACGraph />;
-      case "simulator": return <PermissionSimulator />;
-
-      default: return <Users />;
+      case "users": return <Users {...props} />;
+      case "groups": return <Groups {...props} />;
+      case "roles": return <Roles {...props} />;
+      case "bindings": return <Bindings {...props} />;
+      case "serviceaccounts": return <ServiceAccounts {...props} />;
+      case "audit": return <Audit {...props} />;
+      case "rbac": return <RBACGraph {...props} />;
+      case "simulator": return <PermissionSimulator {...props} />;
+      default: return <Users {...props} />;
     }
   };
 
   return (
-    <>
-      <Navbar page={page} setPage={setPage} />
-      <div className="container">{render()}</div>
-    </>
+    <div className="flex h-screen overflow-hidden bg-gray-50">
+      <Sidebar 
+        page={page} 
+        setPage={setPage} 
+        collapsed={sidebarCollapsed}
+        setCollapsed={setSidebarCollapsed}
+      />
+      
+      <main className="flex-1 overflow-auto">
+        {render()}
+      </main>
+    </div>
   );
 }
