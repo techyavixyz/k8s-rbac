@@ -13,12 +13,7 @@ export default defineConfig(({ mode }) => {
       allowedHosts: env.VITE_ALLOWED_HOST
         ? [env.VITE_ALLOWED_HOST]
         : [],
-      proxy: {
-        "/api": {
-          target: env.VITE_API_PROXY_TARGET,
-          changeOrigin: true
-        }
-      }
+
     }
   };
 });
