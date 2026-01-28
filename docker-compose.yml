@@ -39,7 +39,9 @@ services:
     build:
       context: ./rabc-ui
     ports:
-      - "3000:3000"   # ONLY UI is exposed
+      - "3000:3000" 
+    env_file:
+      - ./rabc-ui/.env        # ONLY UI is exposed
     environment:
       VITE_API_BASE_URL: http://kube-api-backend:3001
     depends_on:
