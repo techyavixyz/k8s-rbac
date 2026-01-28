@@ -1,4 +1,4 @@
-const API = "http://localhost:3001/api";
+const API = "http://kube-api-backend:3001/api";
 
 export async function api(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
