@@ -3,7 +3,7 @@ version: "3.9"
 services:
   mongodb:
     container_name: k8s-rbac-mongodb
-    image: mongo:6.0
+    image: mongo:4.4
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
