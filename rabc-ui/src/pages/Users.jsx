@@ -236,12 +236,10 @@ export default function Users({ collapsed, setCollapsed }) {
                             </button>
                           )}
 
-                          <a
-                            href={`http://localhost:3001/api/kubeconfigs/user/${u.username}`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            <button className="btn btn-sm btn-ghost flex items-center space-x-1">
+                              <a
+                                href={`/api/kubeconfigs/user/${u.username}`}
+                              >
+                                                          <button className="btn btn-sm btn-ghost flex items-center space-x-1">
                               <Download className="w-4 h-4" />
                               <span>Download</span>
                             </button>
