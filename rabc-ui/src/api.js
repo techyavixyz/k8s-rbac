@@ -1,8 +1,13 @@
-const API = "http://kube-api-backend:3001/api";
+// api.js
+const API = "/api"; // <-- relative URL ONLY
 
 export async function api(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    },
+    credentials: "include", // safe default
     ...options
   });
 
