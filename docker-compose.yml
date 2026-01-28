@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  mongodb:
+    container_name: k8s-rbac-mongodb
+    image: mongo:6.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DB_NAME}
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - rbac-net
+
+  kube-api-backend:
+    container_name: k8s-rbac-backend
+    build:
+        context: ./kube-api-backend
+    ports:
+      - "3001:3001"      
+    env_file:
+      - ./kube-api-backend/.env
+    environment:
+      NODE_ENV: production
+      KUBECONFIG: /usr/src/app/config
+    volumes:
+      - ./kube-api-backend/config:/usr/src/app/config:ro
+      - ./kube-api-backend/rabc-data:/usr/src/app/rabc-data
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+    networks:
+      - rbac-net
+
+  rabc-ui:
+    container_name: k8s-rbac-ui
+    build:
+      context: ./rabc-ui
+    ports:
+      - "3000:3000"   # ONLY UI is exposed
+    environment:
+      VITE_API_BASE_URL: http://kube-api-backend:3001
+    depends_on:
+      - kube-api-backend
+    restart: unless-stopped
+    networks:
+      - rbac-net
+
+networks:
+  rbac-net:
+    driver: bridge
+
+volumes:
+  mongo-data:

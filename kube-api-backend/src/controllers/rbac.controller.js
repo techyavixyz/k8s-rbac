@@ -26,7 +26,7 @@ export async function canI(req, res) {
     apiVersion: "authorization.k8s.io/v1",
     kind: "SubjectAccessReview",
     spec: {
-      user: "kubernetes-admin", // ✅ REQUIRED (dummy, overridden by impersonation)
+      user: "kubernetes-admin", 
       resourceAttributes: {
         verb,
         resource,
