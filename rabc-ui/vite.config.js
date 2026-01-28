@@ -6,6 +6,6 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
-    allowedHosts: "all"
+    allowedHosts: ["rbac-k8s.pve.mogio.com", "localhost", "127.0.0.1"]
   }
 });
